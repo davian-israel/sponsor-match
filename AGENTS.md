@@ -11,3 +11,6 @@
 Never say a job "offers sponsorship" or give immigration advice. Always link to GOV.UK for eligibility.
 ## Hard limits
 No spending, no new accounts, no scraping sites that forbid it, no cold outreach, no pricing/legal changes without Davian.
+
+## Deploys
+Pushes to `main` should deploy automatically. If no new Railway deployment appears within 5 minutes, reconnect the service source (Railway `connect-service-source`, same repo and branch) to trigger it, then confirm `/healthz`.
