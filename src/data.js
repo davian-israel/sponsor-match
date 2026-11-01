@@ -37,17 +37,26 @@ export async function importRegister(pool, fetchImpl = fetch) {
   if (!res.ok) throw new Error(`register CSV ${res.status}`);
   const rows = parseCsv(await res.text());
   const pick = (r, ...keys) => keys.map((k) => r[k]).find(Boolean) || null;
-  let n = 0;
+  // Dedupe on (name, route), then insert in batches of 1,000 rows with unnest().
+  const seen = new Map();
   for (const r of rows) {
     const name = pick(r, 'Organisation Name', 'Organisation name');
     if (!name) continue;
-    await pool.query(
-      `INSERT INTO sponsors(name, norm, town, county, rating, route) VALUES ($1,$2,$3,$4,$5,$6)
-       ON CONFLICT (name, route) DO UPDATE SET town=EXCLUDED.town, county=EXCLUDED.county, rating=EXCLUDED.rating, imported_at=now()`,
-      [name, normaliseName(name), pick(r, 'Town/City', 'Town'), pick(r, 'County'), pick(r, 'Type & Rating', 'Type and Rating'), pick(r, 'Route')],
-    );
-    n++;
+    const route = pick(r, 'Route');
+    seen.set(`${name}\u0000${route}`, [name, normaliseName(name), pick(r, 'Town/City', 'Town'), pick(r, 'County'), pick(r, 'Type & Rating', 'Type and Rating'), route]);
   }
+  const all = [...seen.values()];
+  for (let i = 0; i < all.length; i += 1000) {
+    const chunk = all.slice(i, i + 1000);
+    const col = (k) => chunk.map((row) => row[k]);
+    await pool.query(
+      `INSERT INTO sponsors(name, norm, town, county, rating, route)
+       SELECT * FROM unnest($1::text[], $2::text[], $3::text[], $4::text[], $5::text[], $6::text[])
+       ON CONFLICT (name, route) DO UPDATE SET town=EXCLUDED.town, county=EXCLUDED.county, rating=EXCLUDED.rating, imported_at=now()`,
+      [col(0), col(1), col(2), col(3), col(4), col(5)],
+    );
+  }
+  const n = all.length;
   if (n < 1000) throw new Error(`register looks truncated (${n} rows)`); // fail loudly rather than serve a partial register
   await pool.query(`INSERT INTO pipeline_runs(kind, ok, detail) VALUES ('register', true, $1)`, [`${n} rows from ${url}`]);
   return n;
